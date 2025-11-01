@@ -14,6 +14,13 @@ const lineConfig = {
 const lineClient = new line.messagingApi.MessagingApiClient(lineConfig);
 const LIFF_URL = `line://app/${env.LINE_LIFF_CHANNEL_ID}`;
 
+export async function GET() {
+  // นี่คือฟังก์ชันสำหรับให้ LINE กด "Verify"
+  // เราแค่ต้องตอบกลับว่า "OK" (200)
+  // LINE ไม่ต้องการข้อมูลอะไร
+  return json({ status: 'ok' });
+}
+
 // -----------------
 // 2. ฟังก์ชัน POST (สำหรับ LINE Webhook)
 // -----------------
