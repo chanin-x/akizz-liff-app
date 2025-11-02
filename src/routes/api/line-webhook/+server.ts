@@ -6,6 +6,13 @@ import { supabaseAdmin } from '$lib/supabaseAdmin';
 
 export const prerender = false;
 
+import crypto from 'node:crypto';
+// ...
+const signature = request.headers.get('x-line-signature') || '';
+const secret = env.LINE_CHANNEL_SECRET || '';
+const calc = crypto.createHmac('sha256', secret).update(raw).digest('base64');
+console.error('SIG recv=', signature.slice(0,12), 'calc=', calc.slice(0,12));
+
 /** สร้าง LINE client เมื่อจำเป็นเท่านั้น (กันพังถ้า ENV หาย) */
 function createLineClient() {
   const token = env.LINE_CHANNEL_ACCESS_TOKEN;
