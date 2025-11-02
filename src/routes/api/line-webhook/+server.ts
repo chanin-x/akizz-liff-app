@@ -355,7 +355,7 @@ export async function POST({ request }) {
 
         if (messages.length > 0) {
           try {
-            await client.replyMessage({ replyToken: ev.replyToken, messages });
+            await client.replyMessage({ replyToken: ev.replyToken, messages: messages as any });
           } catch (e: any) {
             const detail = e?.originalError?.response?.data ?? e?.response?.data ?? e?.message ?? e;
             console.error('reply error:', detail);
