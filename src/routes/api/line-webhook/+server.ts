@@ -5,6 +5,8 @@ import { env as publicEnv } from '$env/dynamic/public';
 import {
   messagingApi,
   validateSignature,
+  type FlexBox,
+  type FlexComponent,
   type FlexMessage,
   type Message,
   type WebhookEvent
@@ -140,26 +142,110 @@ async function buildBillListMessage(chatId: string): Promise<Message> {
 
     if (error) throw error;
 
-    if (!data || data.length === 0) {
-      return { type: 'text', text: 'ยังไม่มีบิลในกลุ่ม/ห้องนี้ครับ' };
-    }
+    const bills = data ?? [];
 
-    const lines = data.map((bill, index) => {
+    const sections: FlexBox[] = bills.map((bill, index) => {
       const status = bill.status ?? 'pending';
-      const created = bill.created_at ? new Date(bill.created_at).toLocaleString('th-TH') : '-';
-      const due = bill.due_date ? new Date(bill.due_date).toLocaleString('th-TH') : null;
+      const created = bill.created_at
+        ? new Date(bill.created_at).toLocaleString('th-TH')
+        : '-';
+      const due = bill.due_date
+        ? new Date(bill.due_date).toLocaleString('th-TH')
+        : null;
 
-      const duePart = due ? `
-กำหนดชำระ: ${due}` : '';
+      const contents: FlexComponent[] = [
+        {
+          type: 'text',
+          text: `${index + 1}. ${bill.title}`,
+          weight: 'bold',
+          wrap: true
+        },
+        {
+          type: 'text',
+          text: `ยอดรวม ${formatMoney(bill.total_amount)} บาท`,
+          size: 'sm',
+          color: '#4A4A4A'
+        },
+        {
+          type: 'text',
+          text: `สถานะ: ${status}`,
+          size: 'sm',
+          color: '#4A4A4A'
+        },
+        {
+          type: 'text',
+          text: `สร้างเมื่อ: ${created}`,
+          size: 'xs',
+          color: '#888888'
+        }
+      ];
 
-      return `${index + 1}. ${bill.title} — ${formatMoney(bill.total_amount)} บาท
-สถานะ: ${status}${duePart}
-สร้างเมื่อ: ${created}`.trim();
+      if (due) {
+        contents.splice(3, 0, {
+          type: 'text',
+          text: `กำหนดชำระ: ${due}`,
+          size: 'sm',
+          color: '#4A4A4A'
+        });
+      }
+
+      const section: FlexBox = {
+        type: 'box',
+        layout: 'vertical',
+        spacing: 'sm',
+        contents
+      };
+
+      if (index > 0) {
+        section.margin = 'md';
+      }
+
+      return section;
     });
 
+    const bodyContents: FlexComponent[] = [];
+    if (sections.length > 0) {
+      sections.forEach((section, idx) => {
+        if (idx > 0) {
+          bodyContents.push({ type: 'separator', margin: 'md' });
+        }
+        bodyContents.push(section);
+      });
+    } else {
+      bodyContents.push({
+        type: 'text',
+        text: 'ยังไม่มีบิลในกลุ่ม/ห้องนี้ครับ',
+        wrap: true,
+        color: '#888888'
+      });
+    }
+
     return {
-      type: 'text',
-      text: `บิลล่าสุดในกลุ่ม/ห้องนี้ (สูงสุด 5 รายการ):\n${lines.join('\n\n')}`
+      type: 'flex',
+      altText: 'บิลล่าสุดในกลุ่ม/ห้องนี้',
+      contents: {
+        type: 'bubble',
+        header: {
+          type: 'box',
+          layout: 'vertical',
+          contents: [
+            { type: 'text', text: '📋 บิลล่าสุด', weight: 'bold', size: 'lg' },
+            {
+              type: 'text',
+              text: 'สูงสุด 5 รายการล่าสุดในกลุ่ม/ห้องนี้',
+              size: 'xs',
+              color: '#888888',
+              margin: 'sm'
+            }
+          ]
+        },
+        body: {
+          type: 'box',
+          layout: 'vertical',
+          spacing: 'md',
+          contents: bodyContents
+        }
+      }
     };
   } catch (e: any) {
     console.error('fetch bills error:', e?.message ?? e);
