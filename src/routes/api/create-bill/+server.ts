@@ -72,14 +72,25 @@ export async function POST({ request, fetch }) {
 
   // 4) บันทึก DB อย่างระมัดระวัง
   try {
-    await supabaseAdmin.from('users').upsert({
+    // Ensure the group exists to satisfy the foreign key constraint on bills.group_id
+    const { error: groupError } = await supabaseAdmin.from('groups').upsert({
+      group_id: groupId
+    });
+    if (groupError) throw groupError;
+  } catch (e: any) {
+    console.error('Supabase upsert group error:', e?.message ?? e);
+    return serverError('Failed to sync group metadata');
+  }
+
+  supabaseAdmin
+    .from('users')
+    .upsert({
       user_id: userId,
       display_name: creatorName ?? null
+    })
+    .catch((e: any) => {
+      console.error('Supabase upsert user error:', e?.message ?? e);
     });
-  } catch (e: any) {
-    console.error('Supabase upsert user error:', e?.message ?? e);
-    // ไม่ต้องล้มทั้งหมด แค่ล็อกไว้ก็ได้ หรือจะ return 500 ก็ได้
-  }
 
   let billId: string | null = null;
   try {
