@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import liff from '@line/liff';
   import { PUBLIC_LIFF_ID } from '$env/static/public';
+  import { createBillFlexMessage } from '$lib/lineMessages';
 
   let isLoading = true;
   let isSubmitting = false;
@@ -75,8 +76,8 @@
       error = 'ไม่พบข้อมูลห้องสนทนาจาก LINE';
       return;
     }
-    const chatPattern = chatType === 'group' ? /^C[0-9a-z]{32}$/i : /^R[0-9a-z]{32}$/i;
-    if (!chatPattern.test(groupId)) {
+    const expectedPrefix = chatType === 'group' ? 'C' : 'R';
+    if (!groupId || !groupId.toUpperCase().startsWith(expectedPrefix)) {
       error =
         chatType === 'group'
           ? 'ไม่สามารถอ่านรหัสกลุ่ม LINE ได้ กรุณาเปิด LIFF จากกลุ่มอีกครั้ง'
@@ -112,9 +113,17 @@
 
       const payload: CreateBillResponse = await res.json();
 
-      if (!payload?.pushSent && payload?.message) {
+      if (!payload?.pushSent) {
+        const message =
+          payload?.message ??
+          createBillFlexMessage({
+            billId: payload.billId ?? 'temp',
+            title: billTitle,
+            amount: amountValue,
+            creatorName: displayName
+          });
         try {
-          await liff.sendMessages([payload.message]);
+          await liff.sendMessages([message]);
         } catch (e: any) {
           console.error('LIFF sendMessages error:', e?.message ?? e);
           const fallbackText = `🧾 บิลใหม่จาก ${displayName}\n${billTitle}\nยอดรวม ${amountValue.toFixed(2)} บาท`; // eslint-disable-line quotes

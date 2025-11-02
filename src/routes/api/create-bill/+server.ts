@@ -66,8 +66,8 @@ function parseAndValidate(body: CreateBillRequest): ValidatedRequest | Response 
     return badRequest('ไม่พบรหัสแชทจาก LINE');
   }
 
-  const chatPattern = chatType === 'group' ? /^C[0-9a-z]{32}$/i : /^R[0-9a-z]{32}$/i;
-  if (!chatPattern.test(chatId)) {
+  const expectedPrefix = chatType === 'group' ? 'C' : 'R';
+  if (!chatId.toUpperCase().startsWith(expectedPrefix)) {
     const message =
       chatType === 'group'
         ? 'ไม่สามารถอ่านรหัสกลุ่ม LINE ได้ กรุณาเปิด LIFF จากกลุ่มอีกครั้ง'
