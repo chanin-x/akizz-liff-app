@@ -7,24 +7,34 @@ import { supabaseAdmin } from '$lib/supabaseAdmin';
 // -----------------
 // 1. ตั้งค่า Clients
 // -----------------
+const channelSecret = env.LINE_CHANNEL_SECRET;
+const channelAccessToken = env.LINE_CHANNEL_ACCESS_TOKEN;
+
+if (!channelSecret || !channelAccessToken) {
+  throw new Error('LINE channel credentials are missing from the environment configuration');
+}
+
 const lineConfig = {
-  channelSecret: env.LINE_CHANNEL_SECRET,
-  channelAccessToken: env.LINE_CHANNEL_ACCESS_TOKEN,
+  channelSecret,
+  channelAccessToken,
 };
 const lineClient = new line.messagingApi.MessagingApiClient(lineConfig);
 const LIFF_URL = `line://app/${env.LINE_LIFF_CHANNEL_ID}`;
 
-export async function GET() {
+export const GET = async () => {
   // นี่คือฟังก์ชันสำหรับให้ LINE กด "Verify"
-  // เราแค่ต้องตอบกลับว่า "OK" (200)
-  // LINE ไม่ต้องการข้อมูลอะไร
-  return json({ status: 'ok' });
-}
+  // ตอบกลับเป็นข้อความธรรมดา "OK" (200)
+  return new Response('OK', {
+    headers: {
+      'content-type': 'text/plain; charset=utf-8',
+    },
+  });
+};
 
 // -----------------
 // 2. ฟังก์ชัน POST (สำหรับ LINE Webhook)
 // -----------------
-export async function POST({ request }) {
+export const POST = async ({ request }) => {
   const body = await request.text();
   const signature = request.headers.get('x-line-signature') || '';
 
@@ -65,7 +75,7 @@ export async function POST({ request }) {
   }
 
   return json({ status: 'ok' });
-}
+};
 
 // -----------------
 // 3. Helper: สร้าง Flex Message (ปุ่มเปิด LIFF)
