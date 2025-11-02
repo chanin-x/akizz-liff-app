@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import liff from '@line/liff';
-  import { PUBLIC_LIFF_ID } from '$env/static/public'; // ✅ ใช้ PUBLIC_
+  import { PUBLIC_LIFF_ID } from '$env/static/public';
 
   let isLoading = true;
   let isSubmitting = false;
@@ -20,6 +20,7 @@
       isLoading = false;
       return;
     }
+
     try {
       await liff.init({ liffId: PUBLIC_LIFF_ID });
 
@@ -60,7 +61,7 @@
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${liffAccessToken}`
+          Authorization: `Bearer ${liffAccessToken}`
         },
         body: JSON.stringify({
           title: billTitle,
@@ -71,9 +72,10 @@
       });
 
       if (!res.ok) {
-        // กันกรณี 500 ที่ body ไม่ใช่ JSON
         let errMsg = 'ไม่สามารถสร้างบิลได้';
-        try { errMsg = (await res.json()).error ?? errMsg; } catch {}
+        try {
+          errMsg = (await res.json()).error ?? errMsg;
+        } catch {}
         throw new Error(errMsg);
       }
 
@@ -84,3 +86,59 @@
     }
   }
 </script>
+
+<div class="flex min-h-screen items-center justify-center bg-gray-100">
+  <div class="m-4 w-full max-w-md rounded-lg bg-white p-6 shadow-md">
+    {#if isLoading}
+      <p class="text-center text-lg font-semibold">กำลังโหลดข้อมูล AKizz...</p>
+    {:else if error}
+      <div class="text-center text-red-600">
+        <h2 class="text-xl font-bold">เกิดข้อผิดพลาด</h2>
+        <p>{error}</p>
+      </div>
+    {:else}
+      <h1 class="mb-4 text-center text-2xl font-bold text-gray-800">สร้างบิลใหม่ (AKizz)</h1>
+      <p class="mb-4 text-center text-sm text-gray-600">
+        สร้างโดย: <strong>{displayName}</strong>
+      </p>
+
+      <form class="space-y-4" on:submit|preventDefault={handleSubmit}>
+        <div>
+          <label for="title" class="block text-sm font-medium text-gray-700">ชื่อบิล</label>
+          <input
+            id="title"
+            type="text"
+            bind:value={billTitle}
+            required
+            class="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 text-base shadow-sm focus:border-indigo-500 focus:outline-none focus:ring focus:ring-indigo-200"
+            placeholder="เช่น ค่าอาหารเย็น"
+          />
+        </div>
+
+        <div>
+          <label for="amount" class="block text-sm font-medium text-gray-700">ยอดรวม (บาท)</label>
+          <input
+            id="amount"
+            type="number"
+            bind:value={totalAmount}
+            min="0"
+            step="0.01"
+            required
+            class="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 text-base shadow-sm focus:border-indigo-500 focus:outline-none focus:ring focus:ring-indigo-200"
+            placeholder="1000"
+          />
+        </div>
+
+        <button
+          type="submit"
+          class={`w-full rounded-md border border-transparent px-4 py-2 text-sm font-medium text-white shadow-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 ${
+            isSubmitting ? 'cursor-not-allowed bg-gray-400' : 'bg-indigo-600 hover:bg-indigo-700'
+          }`}
+          disabled={isSubmitting}
+        >
+          {isSubmitting ? 'กำลังสร้าง...' : '✅ สร้างบิลและส่งเข้ากลุ่ม'}
+        </button>
+      </form>
+    {/if}
+  </div>
+</div>
