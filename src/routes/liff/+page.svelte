@@ -17,6 +17,7 @@
   type CreateBillResponse = {
     success: boolean;
     billId?: string;
+    pushSent?: boolean;
     warning?: string;
     message?: {
       type: 'flex';
@@ -94,12 +95,19 @@
 
       const payload: CreateBillResponse = await res.json();
 
-      if (payload?.message) {
+      if (!payload?.pushSent && payload?.message) {
         try {
           await liff.sendMessages([payload.message]);
         } catch (e: any) {
           console.error('LIFF sendMessages error:', e?.message ?? e);
-          throw new Error('สร้างบิลแล้วแต่ส่งข้อความเข้าแชทไม่สำเร็จ ลองใหม่อีกครั้งครับ');
+          const fallbackText = `🧾 บิลใหม่จาก ${displayName}\n${billTitle}\nยอดรวม ${amountValue.toFixed(2)} บาท`; // eslint-disable-line quotes
+          try {
+            await liff.sendMessages([{ type: 'text', text: fallbackText }]);
+            alert('ส่งบิลในรูปแบบข้อความธรรมดาแทน เนื่องจากส่ง Flex ไม่สำเร็จ');
+          } catch (fallbackErr: any) {
+            console.error('LIFF fallback send error:', fallbackErr?.message ?? fallbackErr);
+            throw new Error('สร้างบิลแล้วแต่ส่งข้อความเข้าแชทไม่สำเร็จ ลองใหม่อีกครั้งครับ');
+          }
         }
       }
 

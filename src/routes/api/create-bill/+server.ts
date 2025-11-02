@@ -156,18 +156,28 @@ export async function POST({ request, fetch }) {
     const client = makeLineClient();
     if (!client) {
       console.warn('LINE_CHANNEL_ACCESS_TOKEN is missing. Skip pushMessage.');
-    } else {
-      await client.pushMessage({
-        to: groupId,
-        messages: [flexMessage]
-      });
+      throw new Error('Missing LINE channel access token');
     }
+
+    await client.pushMessage({
+      to: groupId,
+      messages: [flexMessage]
+    });
+
+    return json({ success: true, billId, pushSent: true });
   } catch (e: any) {
-    // อย่าโยนออกนอก → กัน 500
+    const detail = e?.originalError?.response?.data ?? e?.response?.data;
+    if (detail) {
+      console.error('pushMessage error detail:', JSON.stringify(detail));
+    }
     console.error('pushMessage error:', e?.message ?? e);
     // อาจตอบ 200 แต่แจ้ง warning ให้ client ก็ได้
-    return json({ success: true, billId, warning: 'Bill created but failed to push message to group.', message: flexMessage });
+    return json({
+      success: true,
+      billId,
+      pushSent: false,
+      warning: 'สร้างบิลสำเร็จ แต่ส่งข้อความผ่านบอทไม่สำเร็จ จะพยายามส่งจาก LIFF แทน',
+      message: flexMessage
+    });
   }
-
-  return json({ success: true, billId, message: flexMessage });
 }
