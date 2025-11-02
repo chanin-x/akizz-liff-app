@@ -32,6 +32,7 @@ function serverError(msg: string) {
 }
 
 export async function POST({ request, fetch }) {
+  const lineClient = makeLineClient();
   // 1) Parse JSON อย่างปลอดภัย
   let payload: any = null;
   try {
@@ -40,9 +41,14 @@ export async function POST({ request, fetch }) {
     return badRequest('Invalid JSON');
   }
 
-  const { title, amount, groupId, creatorName } = payload ?? {};
-  if (!title || typeof amount !== 'number' || amount <= 0 || !groupId) {
+  const { title, amount, groupId } = payload ?? {};
+  const normalizedGroupId = typeof groupId === 'string' ? groupId.trim() : '';
+  if (!title || typeof amount !== 'number' || amount <= 0 || !normalizedGroupId) {
     return badRequest('Missing/invalid fields: title, amount (>0), groupId');
+  }
+
+  if (!/^C[a-f0-9]{32}$/i.test(normalizedGroupId)) {
+    return badRequest('Invalid groupId format');
   }
 
   // 2) ดึง/ตรวจ token จาก Authorization header
@@ -53,7 +59,7 @@ export async function POST({ request, fetch }) {
 
   // 3) Verify LIFF access token กับ LINE
   let userId: string | null = null;
-  let resolvedCreatorName: string | null = typeof creatorName === 'string' && creatorName ? creatorName : null;
+  let resolvedCreatorName: string | null = null;
   try {
     const url = `https://api.line.me/oauth2/v2.1/verify?access_token=${encodeURIComponent(token)}`;
     const vr = await fetch(url, { method: 'GET' });
@@ -97,6 +103,18 @@ export async function POST({ request, fetch }) {
     }
   }
 
+  if (userId && lineClient) {
+    try {
+      const profile = await lineClient.getGroupMemberProfile(normalizedGroupId, userId);
+      if (profile?.displayName) {
+        resolvedCreatorName = profile.displayName;
+      }
+    } catch (e: any) {
+      const detail = e?.originalError?.response?.data ?? e?.message ?? e;
+      console.warn('getGroupMemberProfile failed:', detail);
+    }
+  }
+
   if (!userId) {
     console.error('Missing LINE user ID after verification/profile lookup');
     return serverError('Failed to resolve LINE user ID');
@@ -106,7 +124,7 @@ export async function POST({ request, fetch }) {
   try {
     // Ensure the group exists to satisfy the foreign key constraint on bills.group_id
     const { error: groupError } = await supabaseAdmin.from('groups').upsert({
-      group_id: groupId
+      group_id: normalizedGroupId
     });
     if (groupError) throw groupError;
   } catch (e: any) {
@@ -131,7 +149,7 @@ export async function POST({ request, fetch }) {
     const { data, error } = await supabaseAdmin
       .from('bills')
       .insert({
-        group_id: groupId,        // ระวัง: ต้องเป็น groupId แบบที่ LINE ใช้ push ได้ (C.../R...)
+        group_id: normalizedGroupId, // ระวัง: ต้องเป็น groupId แบบที่ LINE ใช้ push ได้ (C.../R...)
         created_by: userId,
         title,
         total_amount: amount
@@ -153,14 +171,13 @@ export async function POST({ request, fetch }) {
     creatorName: resolvedCreatorName ?? ''
   });
   try {
-    const client = makeLineClient();
-    if (!client) {
+    if (!lineClient) {
       console.warn('LINE_CHANNEL_ACCESS_TOKEN is missing. Skip pushMessage.');
       throw new Error('Missing LINE channel access token');
     }
 
-    await client.pushMessage({
-      to: groupId,
+    await lineClient.pushMessage({
+      to: normalizedGroupId,
       messages: [flexMessage]
     });
 

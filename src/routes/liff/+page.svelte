@@ -80,8 +80,7 @@
         body: JSON.stringify({
           title: billTitle,
           amount: amountValue,
-          groupId,
-          creatorName: displayName
+          groupId
         })
       });
 
