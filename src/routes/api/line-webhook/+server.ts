@@ -1,39 +1,52 @@
 // src/routes/api/line-webhook/+server.ts
 import { json } from '@sveltejs/kit';
 import { env } from '$env/dynamic/private';
-import * as line from '@line/bot-sdk';
+import {
+  messagingApi,
+  validateSignature,
+  type FlexMessage,
+  type WebhookEvent
+} from '@line/bot-sdk';
 import { supabaseAdmin } from '$lib/supabaseAdmin';
+import crypto from 'node:crypto';
 
 export const prerender = false;
-
-import crypto from 'node:crypto';
-// ...
-const signature = request.headers.get('x-line-signature') || '';
-const secret = env.LINE_CHANNEL_SECRET || '';
-const calc = crypto.createHmac('sha256', secret).update(raw).digest('base64');
-console.error('SIG recv=', signature.slice(0,12), 'calc=', calc.slice(0,12));
 
 /** สร้าง LINE client เมื่อจำเป็นเท่านั้น (กันพังถ้า ENV หาย) */
 function createLineClient() {
   const token = env.LINE_CHANNEL_ACCESS_TOKEN;
   if (!token) return null;
-  return new line.messagingApi.MessagingApiClient({ channelAccessToken: token });
+  return new messagingApi.MessagingApiClient({ channelAccessToken: token });
 }
 
 /** ตรวจลายเซ็นแบบยืดหยุ่น: ถ้าขาด header/secret จะยอมผ่าน (กัน verify fail/กัน 500) */
-function verifySignatureFlexible(raw: string, headers: Headers) {
+function verifySignatureFlexible(raw: Buffer, headers: Headers) {
   try {
     const signature = headers.get('x-line-signature') || headers.get('X-Line-Signature') || '';
     const secret = env.LINE_CHANNEL_SECRET || '';
     if (!signature || !secret) return true; // ข้ามเมื่อ verify ไม่ได้
-    return line.webhook.validateSignature(raw, secret, signature);
+    const valid = validateSignature(raw, secret, signature);
+
+    if (!valid) {
+      try {
+        const calc = crypto.createHmac('sha256', secret).update(raw).digest('base64');
+        console.error('Invalid signature details:', {
+          received: signature,
+          calculated: calc
+        });
+      } catch (e) {
+        console.error('Failed to calculate signature digest:', e);
+      }
+    }
+
+    return valid;
   } catch {
     return false;
   }
 }
 
 /** ปุ่มเปิด LIFF (ใช้ตอนคำสั่ง !สร้างบิล) */
-function createBillButton(): line.FlexMessage {
+function createBillButton(): FlexMessage {
   const LIFF_URL = env.LINE_LIFF_CHANNEL_ID ? `line://app/${env.LINE_LIFF_CHANNEL_ID}` : 'https://line.me';
   return {
     type: 'flex',
@@ -70,11 +83,12 @@ export async function GET() {
 }
 
 export async function POST({ request }) {
-  // 1) อ่าน RAW BODY ก่อนเสมอ
-  const raw = await request.text();
+  // 1) อ่าน RAW BODY ก่อนเสมอ (เก็บทั้ง Buffer และ String)
+  const bodyBuffer = Buffer.from(await request.arrayBuffer());
+  const raw = bodyBuffer.toString('utf-8');
 
   // 2) ตรวจลายเซ็นแบบยืดหยุ่น (กัน verify fail/กัน 500)
-  const sigOK = verifySignatureFlexible(raw, request.headers);
+  const sigOK = verifySignatureFlexible(bodyBuffer, request.headers);
   if (!sigOK) {
     console.error('Invalid signature');
     return new Response('OK', { status: 200 });
@@ -83,7 +97,7 @@ export async function POST({ request }) {
   // 3) แปลง JSON; ไม่มี events ⇒ ตอบ 200 (เช่นตอน verify)
   let payload: any = null;
   try { payload = raw ? JSON.parse(raw) : null; } catch {}
-  const events: line.webhook.WebhookEvent[] = payload?.events || [];
+  const events: WebhookEvent[] = payload?.events || [];
   if (!Array.isArray(events) || events.length === 0) return new Response('OK', { status: 200 });
 
   // 4) เตรียม client (ถ้าไม่มี token จะ reply/push ไม่ได้ แต่เรายังตอบ 200)
