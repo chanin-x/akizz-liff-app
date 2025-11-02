@@ -47,7 +47,7 @@ export async function POST({ request, fetch }) {
     return badRequest('Missing/invalid fields: title, amount (>0), groupId');
   }
 
-  if (!/^C[a-f0-9]{32}$/i.test(normalizedGroupId)) {
+  if (!/^[CR][a-f0-9]{32}$/i.test(normalizedGroupId)) {
     return badRequest('Invalid groupId format');
   }
 
