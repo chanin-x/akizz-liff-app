@@ -42,10 +42,13 @@
       const context = liff.getContext();
       const token = liff.getAccessToken();
 
-      if (context?.type !== 'group') throw new Error('ต้องใช้ในกลุ่มเท่านั้น');
+      if (context?.type !== 'group' && context?.type !== 'room') {
+        throw new Error('ต้องใช้ในกลุ่มหรือห้องสนทนาเท่านั้น');
+      }
       if (!token) throw new Error('ไม่สามารถดึง Token ได้');
 
-      groupId = context.groupId!;
+      groupId = context.groupId ?? context.roomId ?? '';
+      if (!groupId) throw new Error('ไม่พบรหัสกลุ่ม/ห้องจาก LINE');
       displayName = profile.displayName;
       liffAccessToken = token;
     } catch (e: any) {

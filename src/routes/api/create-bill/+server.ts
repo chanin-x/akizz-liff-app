@@ -47,7 +47,7 @@ export async function POST({ request, fetch }) {
     return badRequest('Missing/invalid fields: title, amount (>0), groupId');
   }
 
-  if (!/^[CR][a-f0-9]{32}$/i.test(normalizedGroupId)) {
+  if (!/^[CR][0-9A-Za-z_-]{32}$/.test(normalizedGroupId)) {
     return badRequest('Invalid groupId format');
   }
 
@@ -105,13 +105,16 @@ export async function POST({ request, fetch }) {
 
   if (userId && lineClient) {
     try {
-      const profile = await lineClient.getGroupMemberProfile(normalizedGroupId, userId);
+      const isRoom = normalizedGroupId.startsWith('R');
+      const profile = isRoom
+        ? await lineClient.getRoomMemberProfile(normalizedGroupId, userId)
+        : await lineClient.getGroupMemberProfile(normalizedGroupId, userId);
       if (profile?.displayName) {
         resolvedCreatorName = profile.displayName;
       }
     } catch (e: any) {
       const detail = e?.originalError?.response?.data ?? e?.message ?? e;
-      console.warn('getGroupMemberProfile failed:', detail);
+      console.warn('getMemberProfile failed:', detail);
     }
   }
 
