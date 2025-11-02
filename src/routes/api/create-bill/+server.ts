@@ -44,8 +44,9 @@ export async function POST({ request, fetch }) {
   const { title, amount, groupId, chatType } = payload ?? {};
   const normalizedGroupId = typeof groupId === 'string' ? groupId.trim() : '';
   const normalizedChatType = chatType === 'group' || chatType === 'room' ? chatType : '';
+  const chatId = normalizedGroupId;
 
-  if (!title || typeof amount !== 'number' || amount <= 0 || !normalizedGroupId || !normalizedChatType) {
+  if (!title || typeof amount !== 'number' || amount <= 0 || !chatId || !normalizedChatType) {
     return badRequest('Missing/invalid fields: title, amount (>0), groupId, chatType');
   }
 
@@ -106,8 +107,8 @@ export async function POST({ request, fetch }) {
   if (userId && lineClient) {
     try {
       const profile = isRoomChat
-        ? await lineClient.getRoomMemberProfile(normalizedGroupId, userId)
-        : await lineClient.getGroupMemberProfile(normalizedGroupId, userId);
+        ? await lineClient.getRoomMemberProfile(chatId, userId)
+        : await lineClient.getGroupMemberProfile(chatId, userId);
       if (profile?.displayName) {
         resolvedCreatorName = profile.displayName;
       }
@@ -126,7 +127,7 @@ export async function POST({ request, fetch }) {
   try {
     // Ensure the group exists to satisfy the foreign key constraint on bills.group_id
     const { error: groupError } = await supabaseAdmin.from('groups').upsert({
-      group_id: normalizedGroupId
+      group_id: chatId
     });
     if (groupError) throw groupError;
   } catch (e: any) {
@@ -151,7 +152,7 @@ export async function POST({ request, fetch }) {
     const { data, error } = await supabaseAdmin
       .from('bills')
       .insert({
-        group_id: normalizedGroupId, // ระวัง: ต้องเป็น groupId/roomId ของ LINE (C.../R...)
+        group_id: chatId, // ระวัง: ต้องเป็น groupId/roomId ของ LINE (C.../R...)
         created_by: userId,
         title,
         total_amount: amount
@@ -172,14 +173,25 @@ export async function POST({ request, fetch }) {
     amount,
     creatorName: resolvedCreatorName ?? ''
   });
-  try {
+  if (!lineClient || isRoomChat) {
     if (!lineClient) {
       console.warn('LINE_CHANNEL_ACCESS_TOKEN is missing. Skip pushMessage.');
-      throw new Error('Missing LINE channel access token');
     }
+    return json({
+      success: true,
+      billId,
+      pushSent: false,
+      warning:
+        normalizedChatType === 'room'
+          ? 'สร้างบิลสำเร็จ ส่งเข้าแชทผ่าน LIFF ให้เรียบร้อยครับ'
+          : 'สร้างบิลสำเร็จ แต่ส่งข้อความผ่านบอทไม่สำเร็จ จะพยายามส่งจาก LIFF แทน',
+      message: flexMessage
+    });
+  }
 
+  try {
     await lineClient.pushMessage({
-      to: normalizedGroupId,
+      to: chatId,
       messages: [flexMessage]
     });
 
