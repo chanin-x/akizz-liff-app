@@ -1,79 +1,128 @@
-// src/routes/api/create-bill/+server.ts
-import { json, error as SvelteKitError } from '@sveltejs/kit';
+import { json } from '@sveltejs/kit';
 import { env } from '$env/dynamic/private';
 import * as line from '@line/bot-sdk';
 import { supabaseAdmin } from '$lib/supabaseAdmin';
 
-// -----------------
-// 1. ตั้งค่า Clients
-// -----------------
-const lineClient = new line.messagingApi.MessagingApiClient({
-  channelAccessToken: env.LINE_CHANNEL_ACCESS_TOKEN,
-});
+export const prerender = false;
 
-// -----------------
-// 2. ฟังก์ชัน POST (รับจาก LIFF)
-// -----------------
-export async function POST({ request }) {
-  const { title, amount, groupId, creatorName } = await request.json();
-  const token = request.headers.get('Authorization')?.split(' ')[1];
+function makeLineClient() {
+  const accessToken = env.LINE_CHANNEL_ACCESS_TOKEN;
+  if (!accessToken) return null;
+  return new line.messagingApi.MessagingApiClient({ channelAccessToken: accessToken });
+}
 
-  if (!token) throw SvelteKitError(401, 'No token provided');
+function badRequest(msg: string) {
+  return new Response(JSON.stringify({ error: msg }), {
+    status: 400,
+    headers: { 'Content-Type': 'application/json' }
+  });
+}
+function unauthorized(msg: string) {
+  return new Response(JSON.stringify({ error: msg }), {
+    status: 401,
+    headers: { 'Content-Type': 'application/json' }
+  });
+}
+function serverError(msg: string) {
+  return new Response(JSON.stringify({ error: msg }), {
+    status: 500,
+    headers: { 'Content-Type': 'application/json' }
+  });
+}
 
-  // 2.1 ‼️ ตรวจสอบ LIFF Token (ความปลอดภัย)
-  let userId = '';
+export async function POST({ request, fetch }) {
+  // 1) Parse JSON อย่างปลอดภัย
+  let payload: any = null;
   try {
-    const res = await fetch(`https://api.line.me/oauth2/v2.1/verify?access_token=${token}`);
-    if (!res.ok) throw new Error('Invalid token response from LINE');
-    
-    const data = await res.json();
-    if (data.client_id !== env.LINE_LIFF_CHANNEL_ID) {
-      throw new Error('Invalid LIFF token (Client ID mismatch)');
-    }
-    userId = data.sub; // ได้ userId จริง
-  } catch (err: any) {
-    console.error("LIFF Token verification failed:", err.message);
-    throw SvelteKitError(401, err.message);
+    payload = await request.json();
+  } catch {
+    return badRequest('Invalid JSON');
   }
 
-  // 2.2 ‼️ บันทึกลง DB (ใช้ Admin Client)
+  const { title, amount, groupId, creatorName } = payload ?? {};
+  if (!title || typeof amount !== 'number' || amount <= 0 || !groupId) {
+    return badRequest('Missing/invalid fields: title, amount (>0), groupId');
+  }
+
+  // 2) ดึง/ตรวจ token จาก Authorization header
+  const auth = request.headers.get('authorization') || request.headers.get('Authorization') || '';
+  const m = auth.match(/^Bearer\s+(.+)$/i);
+  if (!m) return unauthorized('No token provided');
+  const token = m[1];
+
+  // 3) Verify LIFF access token กับ LINE
+  let userId = '';
   try {
-    // บันทึก User (ถ้ายังไม่มีก็สร้างใหม่)
-    await supabaseAdmin.from('users').upsert({ user_id: userId, display_name: creatorName });
-    
-    // สร้างบิล
-    const { data: billData, error: billError } = await supabaseAdmin
+    const url = `https://api.line.me/oauth2/v2.1/verify?access_token=${encodeURIComponent(token)}`;
+    const vr = await fetch(url, { method: 'GET' });
+    if (!vr.ok) {
+      const t = await vr.text().catch(() => '');
+      return unauthorized(`Invalid token (${vr.status}) ${t}`);
+    }
+    const vj = await vr.json();
+    // หมายเหตุ: client_id ควรตรงกับ "Channel ID" ของ LINE Login/LIFF
+    if (!env.LINE_LIFF_CHANNEL_ID || vj.client_id !== env.LINE_LIFF_CHANNEL_ID) {
+      return unauthorized('Invalid LIFF token (client_id mismatch)');
+    }
+    userId = vj.sub; // user id ของคนเปิด LIFF
+  } catch (e: any) {
+    console.error('LIFF verify error:', e);
+    return serverError('Failed to verify LIFF token');
+  }
+
+  // 4) บันทึก DB อย่างระมัดระวัง
+  try {
+    await supabaseAdmin.from('users').upsert({
+      user_id: userId,
+      display_name: creatorName ?? null
+    });
+  } catch (e: any) {
+    console.error('Supabase upsert user error:', e?.message ?? e);
+    // ไม่ต้องล้มทั้งหมด แค่ล็อกไว้ก็ได้ หรือจะ return 500 ก็ได้
+  }
+
+  let billId: string | null = null;
+  try {
+    const { data, error } = await supabaseAdmin
       .from('bills')
-      .insert({ 
-        group_id: groupId, 
-        created_by: userId, 
-        title: title, 
-        total_amount: amount 
+      .insert({
+        group_id: groupId,        // ระวัง: ต้องเป็น groupId แบบที่ LINE ใช้ push ได้ (C.../R...)
+        created_by: userId,
+        title,
+        total_amount: amount
       })
       .select('bill_id')
       .single();
-
-    if (billError) throw billError;
-
-    // 2.3 ‼️ ส่ง Flex Message บิลจริงเข้ากลุ่ม
-    await lineClient.pushMessage({
-      to: groupId,
-      messages: [createBillFlex(billData.bill_id, title, amount, creatorName)],
-    });
-
-    return json({ success: true, billId: billData.bill_id });
-
-  } catch (err: any) {
-    console.error("Error creating bill or pushing message:", err.message);
-    throw SvelteKitError(500, err.message);
+    if (error) throw error;
+    billId = data.bill_id;
+  } catch (e: any) {
+    console.error('Insert bill error:', e?.message ?? e);
+    return serverError('Failed to create bill');
   }
+
+  // 5) Push Flex message เข้า group
+  try {
+    const client = makeLineClient();
+    if (!client) {
+      console.warn('LINE_CHANNEL_ACCESS_TOKEN is missing. Skip pushMessage.');
+    } else {
+      await client.pushMessage({
+        to: groupId,
+        messages: [createBillFlex(billId!, title, amount, creatorName ?? '')]
+      });
+    }
+  } catch (e: any) {
+    // อย่าโยนออกนอก → กัน 500
+    console.error('pushMessage error:', e?.message ?? e);
+    // อาจตอบ 200 แต่แจ้ง warning ให้ client ก็ได้
+    return json({ success: true, billId, warning: 'Bill created but failed to push message to group.' });
+  }
+
+  return json({ success: true, billId });
 }
 
-// -----------------
-// 3. Helper: สร้าง Flex Message (บิลจริง)
-// -----------------
+// Helper Flex
 function createBillFlex(billId: string, title: string, amount: number, creator: string): line.FlexMessage {
-  // นี่คือบิลเวอร์ชันแรก (ยังไม่มีคนหาร)
   return {
     type: 'flex',
     altText: `บิลใหม่: ${title}`,
@@ -82,9 +131,7 @@ function createBillFlex(billId: string, title: string, amount: number, creator: 
       header: {
         type: 'box',
         layout: 'vertical',
-        contents: [
-          { type: 'text', text: '🧾 บิลใหม่!', weight: 'bold', color: '#1DB446', size: 'lg' },
-        ],
+        contents: [{ type: 'text', text: '🧾 บิลใหม่!', weight: 'bold', color: '#1DB446', size: 'lg' }]
       },
       body: {
         type: 'box',
@@ -93,31 +140,25 @@ function createBillFlex(billId: string, title: string, amount: number, creator: 
         contents: [
           { type: 'text', text: title, size: 'xl', weight: 'bold', wrap: true },
           { type: 'text', text: `ยอดรวม ${amount.toFixed(2)} บาท`, size: 'lg' },
-          { type: 'text', text: `สร้างโดย: ${creator}`, size: 'sm', color: '#888888', margin: 'md' },
+          { type: 'text', text: `สร้างโดย: ${creator || '-'}`, size: 'sm', color: '#888888', margin: 'md' },
           { type: 'separator', margin: 'lg' },
           { type: 'text', text: 'คนที่ยังไม่จ่าย:', margin: 'lg', weight: 'bold' },
-          { type: 'text', text: '(ยังไม่มีคนเข้าร่วมหาร)', color: '#888888', style: 'italic' },
-        ],
+          { type: 'text', text: '(ยังไม่มีคนเข้าร่วมหาร)', color: '#888888' }
+        ]
       },
       footer: {
         type: 'box',
         layout: 'vertical',
         spacing: 'sm',
         contents: [
-          // TODO: เพิ่มปุ่ม "Join" หรือ "จ่ายแล้ว"
-          // นี่คือตัวอย่าง Postback ที่ line-webhook จะต้องรับไปจัดการ
           {
             type: 'button',
-            action: {
-              type: 'postback',
-              label: '✅ ฉันจ่ายแล้ว',
-              data: `action=mark_paid&bill_id=${billId}`,
-            },
+            action: { type: 'postback', label: '✅ ฉันจ่ายแล้ว', data: `action=mark_paid&bill_id=${billId}` },
             style: 'primary',
-            height: 'sm',
-          },
-        ],
-      },
-    },
+            height: 'sm'
+          }
+        ]
+      }
+    }
   };
 }
