@@ -43,15 +43,33 @@
       const profile = await liff.getProfile();
       const context = liff.getContext();
       const token = liff.getAccessToken();
+      const params = new URL(window.location.href).searchParams;
 
-      if (context?.type !== 'group' && context?.type !== 'room') {
-        throw new Error('ต้องใช้ในกลุ่มหรือห้องสนทนาเท่านั้น');
-      }
       if (!token) throw new Error('ไม่สามารถดึง Token ได้');
 
-      chatType = context?.type === 'group' || context?.type === 'room' ? context.type : '';
-      groupId = (context.groupId ?? context.roomId ?? '').trim();
-      if (!groupId) throw new Error('ไม่พบรหัสกลุ่ม/ห้องจาก LINE');
+      const paramChatType = params.get('chatType')?.trim();
+      const paramChatId = params.get('chatId')?.trim() ?? '';
+
+      if (paramChatType === 'group' || paramChatType === 'room') {
+        chatType = paramChatType;
+      } else if (context?.type === 'group' || context?.type === 'room') {
+        chatType = context.type;
+      } else {
+        throw new Error('ลิงก์นี้ไม่ระบุประเภทห้องสนทนา กรุณากดปุ่มสร้างบิลจากในกลุ่มอีกครั้ง');
+      }
+
+      groupId = paramChatId;
+      if (!groupId) {
+        throw new Error('ลิงก์นี้ไม่ระบุรหัสแชท กรุณากดปุ่มสร้างบิลจากในกลุ่มอีกครั้ง');
+      }
+
+      if (context?.type && chatType && context.type !== chatType) {
+        console.warn('LIFF context type mismatch with query parameter:', {
+          contextType: context.type,
+          chatType
+        });
+      }
+
       displayName = profile.displayName;
       liffAccessToken = token;
     } catch (e: any) {

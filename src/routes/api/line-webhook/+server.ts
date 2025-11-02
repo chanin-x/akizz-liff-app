@@ -67,9 +67,32 @@ function getLiffUrl(): string {
   return 'https://line.me';
 }
 
+function appendQueryParams(baseUrl: string, params: Record<string, string | null | undefined>) {
+  const definedEntries = Object.entries(params).filter(([, value]) => value != null && value !== '');
+  if (definedEntries.length === 0) return baseUrl;
+
+  try {
+    const url = new URL(baseUrl);
+    for (const [key, value] of definedEntries) {
+      url.searchParams.set(key, value!);
+    }
+    return url.toString();
+  } catch (error) {
+    console.warn('Failed to append query params to LIFF URL:', error);
+    const separator = baseUrl.includes('?') ? '&' : '?';
+    const query = definedEntries
+      .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(value ?? '')}`)
+      .join('&');
+    return `${baseUrl}${separator}${query}`;
+  }
+}
+
 /** ปุ่มเปิด LIFF (ใช้ตอนคำสั่ง !สร้างบิล) */
-function createBillButton(): FlexMessage {
-  const LIFF_URL = getLiffUrl();
+function createBillButton(chat: { chatId: string; chatType: 'group' | 'room' }): FlexMessage {
+  const LIFF_URL = appendQueryParams(getLiffUrl(), {
+    chatId: chat.chatId,
+    chatType: chat.chatType
+  });
   return {
     type: 'flex',
     altText: 'สร้างบิลใหม่',
@@ -206,9 +229,34 @@ export async function POST({ request }) {
           t === '!bills' || t === 'bills';
 
         if (isCreateCmd) {
-          messages.push(createBillButton());
+          const chatId =
+            ev.source.type === 'group'
+              ? ev.source.groupId
+              : ev.source.type === 'room'
+              ? ev.source.roomId
+              : null;
+
+          if (!chatId) {
+            messages.push({
+              type: 'text',
+              text: 'คำสั่งนี้ใช้ได้เฉพาะในกลุ่มหรือห้องเท่านั้นครับ'
+            });
+          } else {
+            const chatType = ev.source.type === 'group' ? 'group' : 'room';
+            messages.push(
+              createBillButton({
+                chatId,
+                chatType
+              })
+            );
+          }
         } else if (isListCmd) {
-          const chatId = ev.source.type === 'group' ? ev.source.groupId : ev.source.type === 'room' ? ev.source.roomId : null;
+          const chatId =
+            ev.source.type === 'group'
+              ? ev.source.groupId
+              : ev.source.type === 'room'
+              ? ev.source.roomId
+              : null;
           if (!chatId) {
             messages.push({ type: 'text', text: 'คำสั่งนี้ใช้ได้เฉพาะในกลุ่มหรือห้องเท่านั้นครับ' });
           } else {
