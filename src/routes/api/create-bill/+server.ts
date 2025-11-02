@@ -47,7 +47,8 @@ export async function POST({ request, fetch }) {
     return badRequest('Missing/invalid fields: title, amount (>0), groupId');
   }
 
-  if (!/^[CR][0-9A-Za-z_-]{32}$/.test(normalizedGroupId)) {
+  const chatPrefix = normalizedGroupId[0];
+  if (chatPrefix !== 'C' && chatPrefix !== 'R') {
     return badRequest('Invalid groupId format');
   }
 
@@ -103,10 +104,11 @@ export async function POST({ request, fetch }) {
     }
   }
 
+  const isRoomChat = normalizedGroupId.startsWith('R');
+
   if (userId && lineClient) {
     try {
-      const isRoom = normalizedGroupId.startsWith('R');
-      const profile = isRoom
+      const profile = isRoomChat
         ? await lineClient.getRoomMemberProfile(normalizedGroupId, userId)
         : await lineClient.getGroupMemberProfile(normalizedGroupId, userId);
       if (profile?.displayName) {
@@ -152,7 +154,7 @@ export async function POST({ request, fetch }) {
     const { data, error } = await supabaseAdmin
       .from('bills')
       .insert({
-        group_id: normalizedGroupId, // ระวัง: ต้องเป็น groupId แบบที่ LINE ใช้ push ได้ (C.../R...)
+        group_id: normalizedGroupId, // ระวัง: ต้องเป็น groupId/roomId ของ LINE (C.../R...)
         created_by: userId,
         title,
         total_amount: amount
