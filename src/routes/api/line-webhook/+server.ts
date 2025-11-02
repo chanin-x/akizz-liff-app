@@ -1,6 +1,7 @@
 // src/routes/api/line-webhook/+server.ts
 import { json } from '@sveltejs/kit';
 import { env } from '$env/dynamic/private';
+import { env as publicEnv } from '$env/dynamic/public';
 import {
   messagingApi,
   validateSignature,
@@ -46,9 +47,29 @@ function verifySignatureFlexible(raw: Buffer, headers: Headers) {
   }
 }
 
+/** สร้าง URL สำหรับเปิด LIFF จาก ENV ที่มี (รองรับได้ทั้ง ID และ URL ตรงๆ) */
+function getLiffUrl(): string {
+  const candidates = [
+    env.LINE_LIFF_URL,
+    publicEnv.PUBLIC_LIFF_URL,
+    env.LINE_LIFF_ID,
+    publicEnv.PUBLIC_LIFF_ID,
+    env.LINE_LIFF_CHANNEL_ID
+  ].map((value) => (value ?? '').trim());
+
+  for (const value of candidates) {
+    if (!value) continue;
+    if (/^https?:\/\//i.test(value) || value.startsWith('line://')) return value;
+    return `line://app/${value}`;
+  }
+
+  console.warn('LIFF URL is not configured; falling back to https://line.me');
+  return 'https://line.me';
+}
+
 /** ปุ่มเปิด LIFF (ใช้ตอนคำสั่ง !สร้างบิล) */
 function createBillButton(): FlexMessage {
-  const LIFF_URL = env.LINE_LIFF_CHANNEL_ID ? `line://app/${env.LINE_LIFF_CHANNEL_ID}` : 'https://line.me';
+  const LIFF_URL = getLiffUrl();
   return {
     type: 'flex',
     altText: 'สร้างบิลใหม่',
