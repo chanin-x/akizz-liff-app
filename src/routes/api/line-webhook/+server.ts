@@ -100,6 +100,50 @@ function createBillButton(): FlexMessage {
   };
 }
 
+function formatMoney(value: unknown): string {
+  const num = typeof value === 'number' ? value : Number(value ?? 0);
+  if (!Number.isFinite(num)) return '-';
+  return num.toFixed(2);
+}
+
+async function buildBillListMessage(groupId: string): Promise<Message> {
+  try {
+    const { data, error } = await supabaseAdmin
+      .from('bills')
+      .select('bill_id,title,total_amount,status,due_date,created_at')
+      .eq('group_id', groupId)
+      .order('created_at', { ascending: false })
+      .limit(5);
+
+    if (error) throw error;
+
+    if (!data || data.length === 0) {
+      return { type: 'text', text: 'ยังไม่มีบิลในกลุ่มนี้ครับ' };
+    }
+
+    const lines = data.map((bill, index) => {
+      const status = bill.status ?? 'pending';
+      const created = bill.created_at ? new Date(bill.created_at).toLocaleString('th-TH') : '-';
+      const due = bill.due_date ? new Date(bill.due_date).toLocaleString('th-TH') : null;
+
+      const duePart = due ? `
+กำหนดชำระ: ${due}` : '';
+
+      return `${index + 1}. ${bill.title} — ${formatMoney(bill.total_amount)} บาท
+สถานะ: ${status}${duePart}
+สร้างเมื่อ: ${created}`.trim();
+    });
+
+    return {
+      type: 'text',
+      text: `บิลล่าสุดในกลุ่ม (สูงสุด 5 รายการ):\n${lines.join('\n\n')}`
+    };
+  } catch (e: any) {
+    console.error('fetch bills error:', e?.message ?? e);
+    return { type: 'text', text: 'ดึงข้อมูลบิลไม่สำเร็จ กรุณาลองใหม่ครับ' };
+  }
+}
+
 export async function GET() {
   return json({ status: 'ok' });
 }
@@ -154,11 +198,22 @@ export async function POST({ request }) {
         const t = text.replace(/\s+/g, '').toLowerCase();
         const isCreateCmd =
           t === '!สร้างบิล' || t === 'สร้างบิล' ||
-          t === '!bill'   || t === 'bill'   ||
+          t === '!bill' || t === 'bill' ||
           t.startsWith('!สร้างบิล') || t.startsWith('สร้างบิล');
+        const isListCmd =
+          t === '!ดูบิล' || t === 'ดูบิล' ||
+          t === '!billlist' || t === 'billlist' ||
+          t === '!bills' || t === 'bills';
 
         if (isCreateCmd) {
           messages.push(createBillButton());
+        } else if (isListCmd) {
+          const groupId = ev.source.type === 'group' ? ev.source.groupId : null;
+          if (!groupId) {
+            messages.push({ type: 'text', text: 'คำสั่งนี้ใช้ได้เฉพาะในกลุ่มเท่านั้นครับ' });
+          } else {
+            messages.push(await buildBillListMessage(groupId));
+          }
         } else {
           // 5.3.2 ECHO debug — ช่วยตรวจสอบว่า reply ทำงาน
           messages.push({ type: 'text', text: `pong: ${text}` });

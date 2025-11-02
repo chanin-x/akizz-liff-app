@@ -2,6 +2,7 @@ import { json } from '@sveltejs/kit';
 import { env } from '$env/dynamic/private';
 import * as line from '@line/bot-sdk';
 import { supabaseAdmin } from '$lib/supabaseAdmin';
+import { createBillFlexMessage } from '$lib/lineMessages';
 
 export const prerender = false;
 
@@ -145,6 +146,12 @@ export async function POST({ request, fetch }) {
   }
 
   // 5) Push Flex message เข้า group
+  const flexMessage = createBillFlexMessage({
+    billId: billId!,
+    title,
+    amount,
+    creatorName: resolvedCreatorName ?? ''
+  });
   try {
     const client = makeLineClient();
     if (!client) {
@@ -152,57 +159,15 @@ export async function POST({ request, fetch }) {
     } else {
       await client.pushMessage({
         to: groupId,
-        messages: [createBillFlex(billId!, title, amount, resolvedCreatorName ?? '')]
+        messages: [flexMessage]
       });
     }
   } catch (e: any) {
     // อย่าโยนออกนอก → กัน 500
     console.error('pushMessage error:', e?.message ?? e);
     // อาจตอบ 200 แต่แจ้ง warning ให้ client ก็ได้
-    return json({ success: true, billId, warning: 'Bill created but failed to push message to group.' });
+    return json({ success: true, billId, warning: 'Bill created but failed to push message to group.', message: flexMessage });
   }
 
-  return json({ success: true, billId });
-}
-
-// Helper Flex
-function createBillFlex(billId: string, title: string, amount: number, creator: string): line.FlexMessage {
-  return {
-    type: 'flex',
-    altText: `บิลใหม่: ${title}`,
-    contents: {
-      type: 'bubble',
-      header: {
-        type: 'box',
-        layout: 'vertical',
-        contents: [{ type: 'text', text: '🧾 บิลใหม่!', weight: 'bold', color: '#1DB446', size: 'lg' }]
-      },
-      body: {
-        type: 'box',
-        layout: 'vertical',
-        spacing: 'md',
-        contents: [
-          { type: 'text', text: title, size: 'xl', weight: 'bold', wrap: true },
-          { type: 'text', text: `ยอดรวม ${amount.toFixed(2)} บาท`, size: 'lg' },
-          { type: 'text', text: `สร้างโดย: ${creator || '-'}`, size: 'sm', color: '#888888', margin: 'md' },
-          { type: 'separator', margin: 'lg' },
-          { type: 'text', text: 'คนที่ยังไม่จ่าย:', margin: 'lg', weight: 'bold' },
-          { type: 'text', text: '(ยังไม่มีคนเข้าร่วมหาร)', color: '#888888' }
-        ]
-      },
-      footer: {
-        type: 'box',
-        layout: 'vertical',
-        spacing: 'sm',
-        contents: [
-          {
-            type: 'button',
-            action: { type: 'postback', label: '✅ ฉันจ่ายแล้ว', data: `action=mark_paid&bill_id=${billId}` },
-            style: 'primary',
-            height: 'sm'
-          }
-        ]
-      }
-    }
-  };
+  return json({ success: true, billId, message: flexMessage });
 }

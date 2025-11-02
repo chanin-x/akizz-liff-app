@@ -12,7 +12,18 @@
   let liffAccessToken = '';
 
   let billTitle = '';
-  let totalAmount: number | null = null;
+  let totalAmount = '';
+
+  type CreateBillResponse = {
+    success: boolean;
+    billId?: string;
+    warning?: string;
+    message?: {
+      type: 'flex';
+      altText: string;
+      contents: Record<string, unknown>;
+    };
+  };
 
   onMount(async () => {
     if (!PUBLIC_LIFF_ID) {
@@ -44,7 +55,9 @@
   });
 
   async function handleSubmit() {
-    if (!billTitle || !totalAmount || totalAmount <= 0) {
+    const amountValue = Number(totalAmount);
+
+    if (!billTitle || !Number.isFinite(amountValue) || amountValue <= 0) {
       alert('กรุณากรอกข้อมูลให้ครบถ้วน');
       return;
     }
@@ -65,7 +78,7 @@
         },
         body: JSON.stringify({
           title: billTitle,
-          amount: totalAmount,
+          amount: amountValue,
           groupId,
           creatorName: displayName
         })
@@ -77,6 +90,21 @@
           errMsg = (await res.json()).error ?? errMsg;
         } catch {}
         throw new Error(errMsg);
+      }
+
+      const payload: CreateBillResponse = await res.json();
+
+      if (payload?.message) {
+        try {
+          await liff.sendMessages([payload.message]);
+        } catch (e: any) {
+          console.error('LIFF sendMessages error:', e?.message ?? e);
+          throw new Error('สร้างบิลแล้วแต่ส่งข้อความเข้าแชทไม่สำเร็จ ลองใหม่อีกครั้งครับ');
+        }
+      }
+
+      if (payload?.warning) {
+        alert(payload.warning);
       }
 
       liff.closeWindow();
