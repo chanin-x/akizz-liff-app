@@ -48,8 +48,8 @@
       }
       if (!token) throw new Error('ไม่สามารถดึง Token ได้');
 
-      chatType = (context?.type === 'group' || context?.type === 'room') ? context.type : '';
-      groupId = context.groupId ?? context.roomId ?? '';
+      chatType = context?.type === 'group' || context?.type === 'room' ? context.type : '';
+      groupId = (context.groupId ?? context.roomId ?? '').trim();
       if (!groupId) throw new Error('ไม่พบรหัสกลุ่ม/ห้องจาก LINE');
       displayName = profile.displayName;
       liffAccessToken = token;
@@ -73,6 +73,14 @@
     }
     if (!chatType) {
       error = 'ไม่พบข้อมูลห้องสนทนาจาก LINE';
+      return;
+    }
+    const chatPattern = chatType === 'group' ? /^C[0-9a-z]{32}$/i : /^R[0-9a-z]{32}$/i;
+    if (!chatPattern.test(groupId)) {
+      error =
+        chatType === 'group'
+          ? 'ไม่สามารถอ่านรหัสกลุ่ม LINE ได้ กรุณาเปิด LIFF จากกลุ่มอีกครั้ง'
+          : 'ไม่สามารถอ่านรหัสห้อง LINE ได้ กรุณาเปิด LIFF จากห้องสนทนาอีกครั้ง';
       return;
     }
 

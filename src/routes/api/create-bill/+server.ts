@@ -4,6 +4,22 @@ import * as line from '@line/bot-sdk';
 import { supabaseAdmin } from '$lib/supabaseAdmin';
 import { createBillFlexMessage } from '$lib/lineMessages';
 
+type ChatType = 'group' | 'room';
+
+type CreateBillRequest = {
+  title?: unknown;
+  amount?: unknown;
+  groupId?: unknown;
+  chatType?: unknown;
+};
+
+type ValidatedRequest = {
+  title: string;
+  amount: number;
+  chatType: ChatType;
+  chatId: string;
+};
+
 export const prerender = false;
 
 function makeLineClient() {
@@ -31,24 +47,55 @@ function serverError(msg: string) {
   });
 }
 
+function parseAndValidate(body: CreateBillRequest): ValidatedRequest | Response {
+  const titleRaw = typeof body.title === 'string' ? body.title.trim() : '';
+  const amountNum = Number(body.amount);
+  const chatType = body.chatType === 'group' || body.chatType === 'room' ? body.chatType : null;
+  const chatId = typeof body.groupId === 'string' ? body.groupId.trim() : '';
+
+  if (!titleRaw) {
+    return badRequest('ต้องระบุชื่อบิล');
+  }
+  if (!Number.isFinite(amountNum) || amountNum <= 0) {
+    return badRequest('ยอดรวมต้องเป็นตัวเลขที่มากกว่า 0');
+  }
+  if (!chatType) {
+    return badRequest('ไม่พบประเภทแชทจาก LINE');
+  }
+  if (!chatId) {
+    return badRequest('ไม่พบรหัสแชทจาก LINE');
+  }
+
+  const chatPattern = chatType === 'group' ? /^C[0-9a-z]{32}$/i : /^R[0-9a-z]{32}$/i;
+  if (!chatPattern.test(chatId)) {
+    const message =
+      chatType === 'group'
+        ? 'ไม่สามารถอ่านรหัสกลุ่ม LINE ได้ กรุณาเปิด LIFF จากกลุ่มอีกครั้ง'
+        : 'ไม่สามารถอ่านรหัสห้อง LINE ได้ กรุณาเปิด LIFF จากห้องสนทนาอีกครั้ง';
+    return badRequest(message);
+  }
+
+  return {
+    title: titleRaw,
+    amount: Math.round(amountNum * 100) / 100,
+    chatType,
+    chatId
+  };
+}
+
 export async function POST({ request, fetch }) {
   const lineClient = makeLineClient();
-  // 1) Parse JSON อย่างปลอดภัย
-  let payload: any = null;
+  let payload: CreateBillRequest | null = null;
   try {
     payload = await request.json();
   } catch {
     return badRequest('Invalid JSON');
   }
 
-  const { title, amount, groupId, chatType } = payload ?? {};
-  const normalizedGroupId = typeof groupId === 'string' ? groupId.trim() : '';
-  const normalizedChatType = chatType === 'group' || chatType === 'room' ? chatType : '';
-  const chatId = normalizedGroupId;
+  const validated = parseAndValidate(payload ?? {});
+  if (validated instanceof Response) return validated;
 
-  if (!title || typeof amount !== 'number' || amount <= 0 || !chatId || !normalizedChatType) {
-    return badRequest('Missing/invalid fields: title, amount (>0), groupId, chatType');
-  }
+  const { amount, chatId, chatType, title } = validated;
 
   // 2) ดึง/ตรวจ token จาก Authorization header
   const auth = request.headers.get('authorization') || request.headers.get('Authorization') || '';
@@ -102,7 +149,7 @@ export async function POST({ request, fetch }) {
     }
   }
 
-  const isRoomChat = normalizedChatType === 'room';
+  const isRoomChat = chatType === 'room';
 
   if (userId && lineClient) {
     try {
@@ -182,7 +229,7 @@ export async function POST({ request, fetch }) {
       billId,
       pushSent: false,
       warning:
-        normalizedChatType === 'room'
+        chatType === 'room'
           ? 'สร้างบิลสำเร็จ ส่งเข้าแชทผ่าน LIFF ให้เรียบร้อยครับ'
           : 'สร้างบิลสำเร็จ แต่ส่งข้อความผ่านบอทไม่สำเร็จ จะพยายามส่งจาก LIFF แทน',
       message: flexMessage
