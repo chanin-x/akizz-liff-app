@@ -51,7 +51,8 @@ export async function POST({ request, fetch }) {
   const token = m[1];
 
   // 3) Verify LIFF access token กับ LINE
-  let userId = '';
+  let userId: string | null = null;
+  let resolvedCreatorName: string | null = typeof creatorName === 'string' && creatorName ? creatorName : null;
   try {
     const url = `https://api.line.me/oauth2/v2.1/verify?access_token=${encodeURIComponent(token)}`;
     const vr = await fetch(url, { method: 'GET' });
@@ -64,10 +65,40 @@ export async function POST({ request, fetch }) {
     if (!env.LINE_LIFF_CHANNEL_ID || vj.client_id !== env.LINE_LIFF_CHANNEL_ID) {
       return unauthorized('Invalid LIFF token (client_id mismatch)');
     }
-    userId = vj.sub; // user id ของคนเปิด LIFF
+    if (typeof vj.sub === 'string' && vj.sub) {
+      userId = vj.sub; // user id ของคนเปิด LIFF (อาจไม่มีใน LIFF access token)
+    }
   } catch (e: any) {
     console.error('LIFF verify error:', e);
     return serverError('Failed to verify LIFF token');
+  }
+
+  if (!userId || !resolvedCreatorName) {
+    try {
+      const profileRes = await fetch('https://api.line.me/v2/profile', {
+        method: 'GET',
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      if (profileRes.ok) {
+        const profile = await profileRes.json();
+        if (!userId && typeof profile?.userId === 'string' && profile.userId) {
+          userId = profile.userId;
+        }
+        if (!resolvedCreatorName && typeof profile?.displayName === 'string' && profile.displayName) {
+          resolvedCreatorName = profile.displayName;
+        }
+      } else {
+        const text = await profileRes.text().catch(() => '');
+        console.warn('LINE profile fetch failed:', profileRes.status, text);
+      }
+    } catch (e: any) {
+      console.error('LINE profile fetch error:', e?.message ?? e);
+    }
+  }
+
+  if (!userId) {
+    console.error('Missing LINE user ID after verification/profile lookup');
+    return serverError('Failed to resolve LINE user ID');
   }
 
   // 4) บันทึก DB อย่างระมัดระวัง
@@ -85,7 +116,7 @@ export async function POST({ request, fetch }) {
   try {
     const { error: userError } = await supabaseAdmin.from('users').upsert({
       user_id: userId,
-      display_name: creatorName ?? null
+      display_name: resolvedCreatorName ?? null
     });
     if (userError) {
       throw userError;
@@ -121,7 +152,7 @@ export async function POST({ request, fetch }) {
     } else {
       await client.pushMessage({
         to: groupId,
-        messages: [createBillFlex(billId!, title, amount, creatorName ?? '')]
+        messages: [createBillFlex(billId!, title, amount, resolvedCreatorName ?? '')]
       });
     }
   } catch (e: any) {
