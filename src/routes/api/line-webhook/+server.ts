@@ -5,6 +5,7 @@ import {
   messagingApi,
   validateSignature,
   type FlexMessage,
+  type Message,
   type WebhookEvent
 } from '@line/bot-sdk';
 import { supabaseAdmin } from '$lib/supabaseAdmin';
@@ -126,19 +127,9 @@ export async function POST({ request }) {
       // 5.3 เฉพาะ message:text
       if (client && ev.type === 'message' && ev.message.type === 'text') {
         const text = (ev.message.text || '').trim();
+        const messages: Message[] = [];
 
-        // 5.3.1 ECHO debug — ตอบทุกข้อความ (ช่วยพิสูจน์ว่า reply ทำงาน)
-        try {
-          await client.replyMessage({
-            replyToken: ev.replyToken,
-            messages: [{ type: 'text', text: `pong: ${text}` }]
-          });
-        } catch (e: any) {
-          const detail = e?.originalError?.response?.data ?? e?.response?.data ?? e?.message ?? e;
-          console.error('reply ECHO error:', detail);
-        }
-
-        // 5.3.2 คำสั่งแบบหลวม
+        // 5.3.1 คำสั่งแบบหลวม
         const t = text.replace(/\s+/g, '').toLowerCase();
         const isCreateCmd =
           t === '!สร้างบิล' || t === 'สร้างบิล' ||
@@ -146,14 +137,18 @@ export async function POST({ request }) {
           t.startsWith('!สร้างบิล') || t.startsWith('สร้างบิล');
 
         if (isCreateCmd) {
+          messages.push(createBillButton());
+        } else {
+          // 5.3.2 ECHO debug — ช่วยตรวจสอบว่า reply ทำงาน
+          messages.push({ type: 'text', text: `pong: ${text}` });
+        }
+
+        if (messages.length > 0) {
           try {
-            await client.replyMessage({
-              replyToken: ev.replyToken,
-              messages: [createBillButton()]
-            });
+            await client.replyMessage({ replyToken: ev.replyToken, messages });
           } catch (e: any) {
             const detail = e?.originalError?.response?.data ?? e?.response?.data ?? e?.message ?? e;
-            console.error('reply createBillButton error:', detail);
+            console.error('reply error:', detail);
           }
         }
       }
