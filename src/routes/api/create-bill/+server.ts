@@ -82,15 +82,17 @@ export async function POST({ request, fetch }) {
     return serverError('Failed to sync group metadata');
   }
 
-  supabaseAdmin
-    .from('users')
-    .upsert({
+  try {
+    const { error: userError } = await supabaseAdmin.from('users').upsert({
       user_id: userId,
       display_name: creatorName ?? null
-    })
-    .catch((e: any) => {
-      console.error('Supabase upsert user error:', e?.message ?? e);
     });
+    if (userError) {
+      throw userError;
+    }
+  } catch (e: any) {
+    console.error('Supabase upsert user error:', e?.message ?? e);
+  }
 
   let billId: string | null = null;
   try {
