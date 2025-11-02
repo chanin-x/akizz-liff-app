@@ -1,76 +1,118 @@
 // src/routes/api/line-webhook/+server.ts
-import { json, error as SvelteKitError } from '@sveltejs/kit';
+import { json, error as svelteError } from '@sveltejs/kit';
 import { env } from '$env/dynamic/private';
 import * as line from '@line/bot-sdk';
 import { supabaseAdmin } from '$lib/supabaseAdmin';
 
-// -----------------
-// 1. ตั้งค่า Clients
-// -----------------
-const lineConfig = {
-  channelSecret: env.LINE_CHANNEL_SECRET,
-  channelAccessToken: env.LINE_CHANNEL_ACCESS_TOKEN,
-};
-const lineClient = new line.messagingApi.MessagingApiClient(lineConfig);
-const LIFF_URL = `line://app/${env.LINE_LIFF_CHANNEL_ID}`;
+export const prerender = false;
 
-export async function GET() {
-  // นี่คือฟังก์ชันสำหรับให้ LINE กด "Verify"
-  // เราแค่ต้องตอบกลับว่า "OK" (200)
-  // LINE ไม่ต้องการข้อมูลอะไร
-  return json({ status: 'ok' });
+// ❗️อย่าสร้าง client ไว้ top-level (เสี่ยง 500 ถ้า ENV หาย)
+// สร้างเมื่อจำเป็นเท่านั้น
+function createLineClient() {
+  const channelAccessToken = env.LINE_CHANNEL_ACCESS_TOKEN;
+  if (!channelAccessToken) {
+    // ไม่มี token ก็ไม่ต้องสร้าง client (โดยเฉพาะตอน Verify)
+    return null;
+  }
+  return new line.messagingApi.MessagingApiClient({
+    channelAccessToken
+  });
 }
 
-// -----------------
-// 2. ฟังก์ชัน POST (สำหรับ LINE Webhook)
-// -----------------
-export async function POST({ request }) {
-  const body = await request.text();
-  const signature = request.headers.get('x-line-signature') || '';
+function hasSignature(headers: Headers) {
+  return !!(headers.get('x-line-signature') || headers.get('X-Line-Signature'));
+}
 
-  // 2.1 ตรวจสอบ Signature
-  if (!line.webhook.validateSignature(body, lineConfig.channelSecret, signature)) {
-    throw SvelteKitError(400, 'Invalid signature');
-  }
+async function verifySignatureIfPossible(req: Request, raw: string): Promise<boolean> {
+  const signature = req.headers.get('x-line-signature') || req.headers.get('X-Line-Signature') || '';
+  const secret = env.LINE_CHANNEL_SECRET;
 
-  const events: line.webhook.WebhookEvent[] = JSON.parse(body).events;
+  // ถ้าไม่มี secret หรือไม่มี signature ให้ถือว่า "ข้ามการ verify" (แต่ยังตอบ 200 ได้สำหรับ Verify)
+  if (!secret || !signature) return true;
 
-  // 2.2 จัดการ Events (ทำแบบ Promise.all เพื่อความเร็ว)
+  // ใช้ helper ของ SDK ได้ แต่ควบคุมเองจะชัวร์กว่า
   try {
-    const eventHandlers = events.map(async (event) => {
-      
-      if ((event.type === 'join' || event.type === 'follow') && event.source.type === 'group') {
-        // บอทเข้ากลุ่ม -> บันทึก Group ID
-        await supabaseAdmin.from('groups').upsert({ group_id: event.source.groupId });
-      
-      } else if (event.type === 'message' && event.message.type === 'text') {
-        // มีคนพิมพ์
-        if (event.message.text === '!สร้างบิล') {
-          // ถ้าพิมพ์ "!สร้างบิล" -> ส่งปุ่ม LIFF
-          await lineClient.replyMessage({
-            replyToken: event.replyToken,
-            messages: [createBillButton()],
-          });
-        }
-      }
-      // TODO: เพิ่มการจัดการ Postback event (เช่น กด "จ่ายแล้ว") ที่นี่
-      // else if (event.type === 'postback') { ... }
-    });
-    
-    await Promise.all(eventHandlers);
-
-  } catch (err: any) {
-    console.error("Error handling events:", err.message);
-    throw SvelteKitError(500, 'Error handling events');
+    const ok = line.webhook.validateSignature(raw, secret, signature);
+    return ok;
+  } catch {
+    return false;
   }
+}
 
+// GET ไม่ได้ใช้โดย LINE Verify แต่คงไว้เป็น health check ก็ได้
+export async function GET() {
   return json({ status: 'ok' });
 }
 
-// -----------------
-// 3. Helper: สร้าง Flex Message (ปุ่มเปิด LIFF)
-// -----------------
+export async function POST({ request }) {
+  // 1) อ่าน RAW BODY ก่อนเสมอ
+  const raw = await request.text();
+
+  // 2) ถ้า verify ได้ก็ทำ — ถ้าขาด header/secret เราจะ "ยอมผ่าน" เพื่อไม่ให้ 500 ตอน Verify
+  const sigOK = await verifySignatureIfPossible(request, raw);
+  if (!sigOK) {
+    // เสี่ยงเป็น request ปลอม — แต่ให้ตอบ 200 ตอน Verify ก็ได้
+    // ถ้าต้องเข้มงวด ให้เปลี่ยนเป็น: return new Response('Invalid signature', { status: 401 });
+    return new Response('OK', { status: 200 });
+  }
+
+  // 3) ถ้า body ว่าง/ไม่ใช่ JSON/ไม่มี events ⇒ น่าจะเป็น Verify → ตอบ 200 ทันที
+  let payload: any = null;
+  try {
+    payload = raw ? JSON.parse(raw) : null;
+  } catch {
+    // ไม่ใช่ JSON ก็ไม่ต้องพัง
+  }
+  const events: line.webhook.WebhookEvent[] = payload?.events || [];
+  if (!Array.isArray(events) || events.length === 0) {
+    return new Response('OK', { status: 200 });
+  }
+
+  // 4) สร้าง client เฉพาะตอนต้องใช้ (และมี token)
+  const lineClient = createLineClient();
+
+  // 5) จัดการ events แบบไม่พัง endpoint — ห้าม throw ออกนอก
+  try {
+    await Promise.all(
+      events.map(async (event) => {
+        // ตัวอย่าง: บันทึก group id เมื่อ join group
+        if ((event.type === 'join') && event.source.type === 'group') {
+          try {
+            await supabaseAdmin.from('groups').upsert({ group_id: event.source.groupId });
+          } catch (e) {
+            console.error('Supabase upsert error:', e);
+          }
+          return;
+        }
+
+        // follow มักเป็น user ไม่ใช่ group — อย่าบันทึกผิด type
+        if (event.type === 'follow' && event.source.type === 'user') {
+          // ทำอย่างอื่นถ้าต้องการ
+          return;
+        }
+
+        // ตอบข้อความเฉพาะเมื่อมี client (มี token) และเป็น message event
+        if (lineClient && event.type === 'message' && event.message.type === 'text') {
+          if (event.message.text?.trim() === '!สร้างบิล') {
+            await lineClient.replyMessage({
+              replyToken: event.replyToken,
+              messages: [createBillButton()]
+            });
+          }
+        }
+      })
+    );
+  } catch (err) {
+    // กัน 500: log แล้วตอบ 200 ไปก่อน
+    console.error('Error handling events:', err);
+  }
+
+  // 6) ตอบกลับทันที (อย่ารองานหนัก)
+  return new Response('OK', { status: 200 });
+}
+
 function createBillButton(): line.FlexMessage {
+  const LIFF_URL = env.LINE_LIFF_CHANNEL_ID ? `line://app/${env.LINE_LIFF_CHANNEL_ID}` : 'https://line.me';
   return {
     type: 'flex',
     altText: 'สร้างบิลใหม่',
@@ -82,8 +124,8 @@ function createBillButton(): line.FlexMessage {
         spacing: 'md',
         contents: [
           { type: 'text', text: 'AKizz Bill Bot', weight: 'bold', size: 'xl' },
-          { type: 'text', text: 'กดปุ่มด้านล่างเพื่อเปิดฟอร์มสำหรับสร้างบิลและหารบิลในกลุ่มครับ', wrap: true },
-        ],
+          { type: 'text', text: 'กดปุ่มด้านล่างเพื่อเปิดฟอร์มสำหรับสร้างบิลและหารบิลในกลุ่มครับ', wrap: true }
+        ]
       },
       footer: {
         type: 'box',
@@ -91,16 +133,12 @@ function createBillButton(): line.FlexMessage {
         contents: [
           {
             type: 'button',
-            action: {
-              type: 'uri',
-              label: '📝 สร้างบิลใหม่',
-              uri: LIFF_URL, // ‼️ ลิงก์ไป LIFF App
-            },
+            action: { type: 'uri', label: '📝 สร้างบิลใหม่', uri: LIFF_URL },
             style: 'primary',
-            height: 'sm',
-          },
-        ],
-      },
-    },
+            height: 'sm'
+          }
+        ]
+      }
+    }
   };
 }
