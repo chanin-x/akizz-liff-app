@@ -73,17 +73,40 @@ async function loadBills(chatId: string) {
   }
 }
 
-async function loadMembers(chatId: string, chatType: ChatType, lineClient: ReturnType<typeof createMessagingClient>) {
-  if (!lineClient) return [] as Member[];
+async function loadMembers(
+  chatId: string,
+  chatType: ChatType,
+  lineClient: ReturnType<typeof createMessagingClient>
+): Promise<Member[] | Response> {
+  if (!lineClient) {
+    return serverError('ยังไม่ได้ตั้งค่า LINE_CHANNEL_ACCESS_TOKEN บนเซิร์ฟเวอร์');
+  }
+
+  const ids = await listChatMemberIds(lineClient, chatType, chatId);
+  const uniqueIds = Array.from(new Set(ids));
+
+  if (uniqueIds.length === 0) {
+    return serverError('ไม่สามารถดึงรายชื่อสมาชิกจาก Messaging API ได้ กรุณาตรวจสอบว่าเชิญบอทเข้ากลุ่มแล้ว');
+  }
+
+  const limitedIds = uniqueIds.slice(0, 200);
+
+  const results = await Promise.allSettled(
+    limitedIds.map(async (userId) => {
+      const profile = await getChatMemberProfile(lineClient, chatType, chatId, userId);
+      return { userId, displayName: profile?.displayName ?? null } satisfies Member;
+    })
+  );
 
   const members: Member[] = [];
-  const ids = await listChatMemberIds(lineClient, chatType, chatId);
+  for (const result of results) {
+    if (result.status === 'fulfilled') {
+      members.push(result.value);
+    }
+  }
 
-  const limitedIds = ids.slice(0, 100);
-
-  for (const userId of limitedIds) {
-    const profile = await getChatMemberProfile(lineClient, chatType, chatId, userId);
-    members.push({ userId, displayName: profile?.displayName ?? null });
+  if (members.length === 0) {
+    return serverError('ไม่สามารถอ่านโปรไฟล์สมาชิกจาก Messaging API ได้');
   }
 
   return members;
@@ -108,13 +131,12 @@ export async function GET({ request, fetch, url }) {
   const members: Member[] = [];
   const seenIds = new Set<string>();
 
-  if (lineClient) {
-    const lineMembers = await loadMembers(chatId, chatType, lineClient);
-    for (const member of lineMembers) {
-      if (seenIds.has(member.userId)) continue;
-      seenIds.add(member.userId);
-      members.push(member);
-    }
+  const lineMembers = await loadMembers(chatId, chatType, lineClient);
+  if (lineMembers instanceof Response) return lineMembers;
+  for (const member of lineMembers) {
+    if (seenIds.has(member.userId)) continue;
+    seenIds.add(member.userId);
+    members.push(member);
   }
 
   if (!seenIds.has(auth.userId)) {
